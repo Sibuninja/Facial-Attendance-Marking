@@ -23,7 +23,7 @@ def assure_path_exists(path):
 def tick():
     time_string = time.strftime('%H:%M:%S')
     clock.config(text=time_string)
-    clock.after(200,tick)
+    clock.after(200, tick)
 
 ###################################################################################
 
@@ -108,26 +108,41 @@ def change_pass():
 
 def psw():
     assure_path_exists("TrainingImageLabel/")
-    exists1 = os.path.isfile("TrainingImageLabel\psd.txt")
-    if exists1:
-        tf = open("TrainingImageLabel\psd.txt", "r")
-        key = tf.read()
+    psd_file = "TrainingImageLabel/psd.txt"
+
+    # Check if password file exists
+    if os.path.isfile(psd_file):
+        with open(psd_file, "r") as tf:
+            key = tf.read().strip()   # Remove spaces/newlines
     else:
-        new_pas = tsd.askstring('Old Password not found', 'Please enter a new password below', show='*')
-        if new_pas == None:
-            mess._show(title='No Password Entered', message='Password not set!! Please try again')
-        else:
-            tf = open("TrainingImageLabel\psd.txt", "w")
-            tf.write(new_pas)
-            mess._show(title='Password Registered', message='New password was registered successfully!!')
+        key = None  # no password set yet
+
+    # If no password found, ask to create one
+    if not key:
+        new_pas = tsd.askstring('Old Password not found', 
+                                'Please enter a new password below', 
+                                show='*')
+        if new_pas is None or new_pas.strip() == "":
+            mess._show(title='No Password Entered', 
+                       message='Password not set!! Please try again')
             return
+        else:
+            with open(psd_file, "w") as tf:
+                tf.write(new_pas.strip())
+            mess._show(title='Password Registered', 
+                       message='New password was registered successfully!!')
+            return
+
+    # Now ask user for password
     password = tsd.askstring('Password', 'Enter Password', show='*')
-    if (password == key):
+    if password == key:
         TrainImages()
-    elif (password == None):
-        pass
+    elif password is None:
+        return  # user cancelled
     else:
-        mess._show(title='Wrong Password', message='You have entered wrong password')
+        mess._show(title='Wrong Password', 
+                   message='You have entered wrong password')
+
 
 ######################################################################################
 
@@ -251,83 +266,99 @@ def TrackImages():
     check_haarcascadefile()
     assure_path_exists("Attendance/")
     assure_path_exists("StudentDetails/")
+
+    # Clear table before inserting new entries
     for k in tv.get_children():
         tv.delete(k)
-    msg = ''
-    i = 0
-    j = 0
-    recognizer = cv2.face.LBPHFaceRecognizer_create()  # cv2.createLBPHFaceRecognizer()
-    exists3 = os.path.isfile("TrainingImageLabel\Trainner.yml")
-    if exists3:
-        recognizer.read("TrainingImageLabel\Trainner.yml")
-    else:
+
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    trainner_path = os.path.join("TrainingImageLabel", "Trainner.yml")
+
+    if not os.path.isfile(trainner_path):
         mess._show(title='Data Missing', message='Please click on Save Profile to reset data!!')
         return
-    harcascadePath = "haarcascade_frontalface_default.xml"
-    faceCascade = cv2.CascadeClassifier(harcascadePath);
+
+    recognizer.read(trainner_path)
+    faceCascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 
     cam = cv2.VideoCapture(0)
     font = cv2.FONT_HERSHEY_SIMPLEX
     col_names = ['Id', '', 'Name', '', 'Date', '', 'Time']
-    exists1 = os.path.isfile("StudentDetails\StudentDetails.csv")
-    if exists1:
-        df = pd.read_csv("StudentDetails\StudentDetails.csv")
-    else:
+
+    student_path = os.path.join("StudentDetails", "StudentDetails.csv")
+    if not os.path.isfile(student_path):
         mess._show(title='Details Missing', message='Students details are missing, please check!')
         cam.release()
         cv2.destroyAllWindows()
-        window.destroy()
+        return
+
+    df = pd.read_csv(student_path)
+
+    marked_ids = set()  # ✅ Prevent duplicate attendance entries
+    attendance_list = []
+
     while True:
         ret, im = cam.read()
         gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
         faces = faceCascade.detectMultiScale(gray, 1.2, 5)
+
         for (x, y, w, h) in faces:
             cv2.rectangle(im, (x, y), (x + w, y + h), (225, 0, 0), 2)
             serial, conf = recognizer.predict(gray[y:y + h, x:x + w])
-            if (conf < 50):
+
+            if conf < 50:
                 ts = time.time()
                 date = datetime.datetime.fromtimestamp(ts).strftime('%d-%m-%Y')
                 timeStamp = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+
                 aa = df.loc[df['SERIAL NO.'] == serial]['NAME'].values
                 ID = df.loc[df['SERIAL NO.'] == serial]['ID'].values
-                ID = str(ID)
-                ID = ID[1:-1]
-                bb = str(aa)
-                bb = bb[2:-2]
-                attendance = [str(ID), '', bb, '', str(date), '', str(timeStamp)]
+
+                if len(aa) > 0 and len(ID) > 0:
+                    name = str(aa[0])
+                    user_id = str(ID[0])
+
+                    if user_id not in marked_ids:  # ✅ only mark once
+                        attendance = [user_id, '', name, '', date, '', timeStamp]
+                        attendance_list.append(attendance)
+                        marked_ids.add(user_id)
+                    
+                    bb = name
+                else:
+                    bb = "Unknown"
 
             else:
-                Id = 'Unknown'
-                bb = str(Id)
+                bb = "Unknown"
+
             cv2.putText(im, str(bb), (x, y + h), font, 1, (255, 255, 255), 2)
+
         cv2.imshow('Taking Attendance', im)
-        if (cv2.waitKey(1) == ord('q')):
+        if cv2.waitKey(1) == ord('q'):
             break
+
+    # ✅ Save attendance after loop ends
     ts = time.time()
     date = datetime.datetime.fromtimestamp(ts).strftime('%d-%m-%Y')
-    exists = os.path.isfile("Attendance\Attendance_" + date + ".csv")
-    if exists:
-        with open("Attendance\Attendance_" + date + ".csv", 'a+') as csvFile1:
-            writer = csv.writer(csvFile1)
-            writer.writerow(attendance)
-        csvFile1.close()
-    else:
-        with open("Attendance\Attendance_" + date + ".csv", 'a+') as csvFile1:
-            writer = csv.writer(csvFile1)
+    attendance_path = os.path.join("Attendance", f"Attendance_{date}.csv")
+
+    file_exists = os.path.isfile(attendance_path)
+    with open(attendance_path, 'a+', newline='') as csvFile1:
+        writer = csv.writer(csvFile1)
+        if not file_exists:
             writer.writerow(col_names)
-            writer.writerow(attendance)
-        csvFile1.close()
-    with open("Attendance\Attendance_" + date + ".csv", 'r') as csvFile1:
+        writer.writerows(attendance_list)
+
+    # ✅ Update table with new records
+    with open(attendance_path, 'r') as csvFile1:
         reader1 = csv.reader(csvFile1)
+        next(reader1)  # skip header
         for lines in reader1:
-            i = i + 1
-            if (i > 1):
-                if (i % 2 != 0):
-                    iidd = str(lines[0]) + '   '
-                    tv.insert('', 0, text=iidd, values=(str(lines[2]), str(lines[4]), str(lines[6])))
-    csvFile1.close()
+            iidd = str(lines[0]) + '   '
+            tv.insert('', 0, text=iidd, values=(str(lines[2]), str(lines[4]), str(lines[6])))
+
     cam.release()
     cv2.destroyAllWindows()
+
 
 ######################################## USED STUFFS ############################################
     
@@ -369,17 +400,18 @@ frame2.place(relx=0.51, rely=0.17, relwidth=0.38, relheight=0.80)
 message3 = tk.Label(window, text="Face Recognition Based Attendance System" ,fg="white",bg="#262523" ,width=55 ,height=1,font=('times', 29, ' bold '))
 message3.place(x=10, y=10)
 
-frame3 = tk.Frame(window, bg="#c4c6ce")
-frame3.place(relx=0.52, rely=0.09, relwidth=0.09, relheight=0.07)
+date_time_frame = tk.Frame(window, bg="#262523")
+date_time_frame.place(relx=0.36, rely=0.09, relwidth=0.45, relheight=0.07)
 
-frame4 = tk.Frame(window, bg="#c4c6ce")
-frame4.place(relx=0.36, rely=0.09, relwidth=0.16, relheight=0.07)
+datef = tk.Label(date_time_frame, text=day+"-"+mont[month.zfill(2)]+"-"+year, fg="orange", bg="#262523", height=1, font=('times', 16, ' bold '), anchor='center')
+separator = tk.Label(date_time_frame, text="  |  ", fg="white", bg="#262523", height=1, font=('times', 16, ' bold '), anchor='center')
+clock = tk.Label(date_time_frame, fg="orange", bg="#262523", height=1, font=('times', 16, ' bold '), anchor='center')
 
-datef = tk.Label(frame4, text = day+"-"+mont[month]+"-"+year+"  |  ", fg="orange",bg="#262523" ,width=55 ,height=1,font=('times', 22, ' bold '))
-datef.pack(fill='both',expand=1)
-
-clock = tk.Label(frame3,fg="orange",bg="#262523" ,width=55 ,height=1,font=('times', 22, ' bold '))
-clock.pack(fill='both',expand=1)
+# Center all three labels horizontally
+datef.pack(side='left', fill='y', expand=False, padx=(0,5))
+separator.pack(side='left', fill='y', expand=False)
+clock.pack(side='left', fill='y', expand=False, padx=(5,0))
+date_time_frame.pack_propagate(False)
 tick()
 
 head2 = tk.Label(frame2, text="                       For New Registrations                       ", fg="black",bg="#3ece48" ,font=('times', 17, ' bold ') )
